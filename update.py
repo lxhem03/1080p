@@ -1,11 +1,110 @@
 import os
 import traceback
-
+import platform
+import subprocess
+import requests
+import shutil
+import tarfile
 from decouple import config
 from pathlib import Path
 from subprocess import check_output
 from subprocess import run as bashrun
 
+
+
+def run_cmd(cmd, check=True):
+    print(f"--> Running: {cmd}")
+    subprocess.run(cmd, shell=True, check=check)
+
+
+def download_and_extract_ffmpeg():
+    arch = platform.machine()
+    arch_map = {"aarch64": "arm64", "x86_64": "64"}
+    arch_str = arch_map.get(arch, arch)
+
+    # Get latest release info from GitHub API
+    url = "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/latest"
+    print("--> Fetching latest ffmpeg release info...")
+    release = requests.get(url).json()
+
+    # Find gpl build with correct arch
+    asset = None
+    for a in release["assets"]:
+        if f"linux{arch_str}-gpl" in a["name"] and a["name"].endswith(".tar.xz"):
+            asset = a
+            break
+
+    if not asset:
+        raise RuntimeError(f"No ffmpeg build found for arch={arch_str}")
+
+    ffmpeg_url = asset["browser_download_url"]
+    ffmpeg_file = asset["name"]
+
+    print(f"--> Downloading: {ffmpeg_url}")
+    run_cmd(f"wget -q {ffmpeg_url}")
+
+    # Extract
+    print("--> Extracting ffmpeg...")
+    with tarfile.open(ffmpeg_file, "r:xz") as tar:
+        tar.extractall(".")
+
+    # Copy binaries to /usr/bin
+    folder = [f for f in os.listdir(".") if f.startswith("ffmpeg-")][0]
+    bin_path = os.path.join(folder, "bin")
+
+    for f in os.listdir(bin_path):
+        shutil.copy(os.path.join(bin_path, f), "/usr/bin")
+
+    # Cleanup
+    os.remove(ffmpeg_file)
+    shutil.rmtree(folder)
+
+    # Verify codecs
+    print("--> Verifying codecs (vp9 + av1)")
+    run_cmd("ffmpeg -codecs | grep -E 'vp9|av1'")
+
+
+def setup_environment():
+    # 1. Create dirs
+    os.makedirs("/bot", exist_ok=True)
+    os.makedirs("/tgenc", exist_ok=True)
+    run_cmd("chmod 777 /bot")
+
+    # 2. Environment variables
+    os.environ["DEBIAN_FRONTEND"] = "noninteractive"
+    os.environ["TZ"] = "Africa/Lagos"
+    os.environ["TERM"] = "xterm"
+
+    # 3. Install dependencies
+    arch = platform.machine()
+    run_cmd("dnf -qq -y update")
+    run_cmd(
+        "dnf -qq -y install git aria2 bash xz wget curl pv jq python3-pip mediainfo "
+        "psmisc procps-ng qbittorrent-nox"
+    )
+    if arch == "aarch64":
+        run_cmd("dnf -qq -y install gcc python3-devel")
+
+    run_cmd("python3 -m pip install --upgrade pip setuptools")
+
+    # 4. Install latest ffmpeg with vp9 + av1
+    download_and_extract_ffmpeg()
+
+    # 5. Install Python requirements
+    if os.path.exists("requirements.txt"):
+        run_cmd("pip3 install -r requirements.txt")
+    else:
+        print("⚠️ requirements.txt not found")
+
+    # 6. Cleanup for arm64
+    if arch == "aarch64":
+        run_cmd("dnf -qq -y history undo last")
+
+    run_cmd("dnf clean all")
+
+
+if __name__ == "__main__":
+    setup_environment()
 
 def varsgetter(files):
     evars = ""
