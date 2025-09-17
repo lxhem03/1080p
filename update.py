@@ -17,19 +17,35 @@ def run_cmd(cmd, check=True):
     subprocess.run(cmd, shell=True, check=check)
 
 
+def get_work_dirs():
+    """Choose writable dirs for bot."""
+    base_dir = os.environ.get("APP_HOME", "/app")
+    bot_dir = os.path.join(base_dir, "bot")
+    tg_dir = os.path.join(base_dir, "tgenc")
+
+    try:
+        os.makedirs(bot_dir, exist_ok=True)
+        os.makedirs(tg_dir, exist_ok=True)
+    except OSError:
+        bot_dir = "/tmp/bot"
+        tg_dir = "/tmp/tgenc"
+        os.makedirs(bot_dir, exist_ok=True)
+        os.makedirs(tg_dir, exist_ok=True)
+
+    return bot_dir, tg_dir
+
+
 def download_and_extract_ffmpeg():
     arch = platform.machine()
     arch_map = {"aarch64": "arm64", "x86_64": "64"}
     arch_str = arch_map.get(arch, arch)
 
-    # Get latest release info from GitHub API
     url = "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/latest"
     print("--> Fetching latest ffmpeg release info...")
     release = requests.get(url).json()
 
-    # Find gpl build with correct arch
     asset = None
-    for a in release["assets"]:
+    for a in release.get("assets", []):
         if f"linux{arch_str}-gpl" in a["name"] and a["name"].endswith(".tar.xz"):
             asset = a
             break
@@ -43,79 +59,47 @@ def download_and_extract_ffmpeg():
     print(f"--> Downloading: {ffmpeg_url}")
     run_cmd(f"wget -q {ffmpeg_url}")
 
-    # Extract
     print("--> Extracting ffmpeg...")
     with tarfile.open(ffmpeg_file, "r:xz") as tar:
         tar.extractall(".")
 
-    # Copy binaries to /usr/bin
     folder = [f for f in os.listdir(".") if f.startswith("ffmpeg-")][0]
     bin_path = os.path.join(folder, "bin")
 
     for f in os.listdir(bin_path):
         shutil.copy(os.path.join(bin_path, f), "/usr/bin")
 
-    # Cleanup
     os.remove(ffmpeg_file)
     shutil.rmtree(folder)
 
-    # Verify codecs
     print("--> Verifying codecs (vp9 + av1)")
     run_cmd("ffmpeg -codecs | grep -E 'vp9|av1'")
 
 
 def setup_environment():
-    # 1. Create dirs
-    BASE_DIR = os.environ.get("APP_HOME", "/app")
-    BOT_DIR = os.path.join(BASE_DIR, "bot")
-    TG_DIR = os.path.join(BASE_DIR, "tgenc")
+    bot_dir, tg_dir = get_work_dirs()
+    print(f"Bot dir: {bot_dir}")
+    print(f"Tgenc dir: {tg_dir}")
 
-    # If /app is not writable (rare case), use /tmp
-    try:
-        os.makedirs(BOT_DIR, exist_ok=True)
-        os.makedirs(TG_DIR, exist_ok=True)
-    except OSError:
-        BOT_DIR = "/tmp/bot"
-        TG_DIR = "/tmp/tgenc"
-        os.makedirs(BOT_DIR, exist_ok=True)
-        os.makedirs(TG_DIR, exist_ok=True)
+    run_cmd(f"chmod 777 {bot_dir}")
 
-    print(f"Bot dir: {BOT_DIR}")
-    print(f"Tgenc dir: {TG_DIR}")
-    run_cmd("chmod 777 /bot")
+    # Install system packages (Debian-based Leapcell)
+    run_cmd("apt-get update -qq && apt-get install -y git wget curl xz-utils aria2 jq pv mediainfo procps qbittorrent-nox")
 
-    # 2. Environment variables
-    os.environ["DEBIAN_FRONTEND"] = "noninteractive"
-    os.environ["TZ"] = "Africa/Lagos"
-    os.environ["TERM"] = "xterm"
-
-    # 3. Install dependencies
-    arch = platform.machine()
-    run_cmd("dnf -qq -y update")
-    run_cmd(
-        "dnf -qq -y install git aria2 bash xz wget curl pv jq python3-pip mediainfo "
-        "psmisc procps-ng qbittorrent-nox"
-    )
-    if arch == "aarch64":
-        run_cmd("dnf -qq -y install gcc python3-devel")
-
+    # Upgrade pip + setuptools
     run_cmd("python3 -m pip install --upgrade pip setuptools")
 
-    # 4. Install latest ffmpeg with vp9 + av1
+    # Install ffmpeg with VP9 + AV1
     download_and_extract_ffmpeg()
 
-    # 5. Install Python requirements
+    # Install Python requirements
     if os.path.exists("requirements.txt"):
-        run_cmd("pip3 install -r requirements.txt")
+        print("requirments.txt is available in the repository! ")
     else:
         print("⚠️ requirements.txt not found")
 
-    # 6. Cleanup for arm64
-    if arch == "aarch64":
-        run_cmd("dnf -qq -y history undo last")
-
-    run_cmd("dnf clean all")
-
+    # Cleanup apt cache
+    run_cmd("apt-get clean && rm -rf /var/lib/apt/lists/*")
     
 
 def varsgetter(files):
