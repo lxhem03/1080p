@@ -66,8 +66,22 @@ def download_and_extract_ffmpeg():
 
 def setup_environment():
     # 1. Create dirs
-    os.makedirs("/bot", exist_ok=True)
-    os.makedirs("/tgenc", exist_ok=True)
+    BASE_DIR = os.environ.get("APP_HOME", "/app")
+    BOT_DIR = os.path.join(BASE_DIR, "bot")
+    TG_DIR = os.path.join(BASE_DIR, "tgenc")
+
+    # If /app is not writable (rare case), use /tmp
+    try:
+        os.makedirs(BOT_DIR, exist_ok=True)
+        os.makedirs(TG_DIR, exist_ok=True)
+    except OSError:
+        BOT_DIR = "/tmp/bot"
+        TG_DIR = "/tmp/tgenc"
+        os.makedirs(BOT_DIR, exist_ok=True)
+        os.makedirs(TG_DIR, exist_ok=True)
+
+    print(f"Bot dir: {BOT_DIR}")
+    print(f"Tgenc dir: {TG_DIR}")
     run_cmd("chmod 777 /bot")
 
     # 2. Environment variables
@@ -102,9 +116,7 @@ def setup_environment():
 
     run_cmd("dnf clean all")
 
-
-if __name__ == "__main__":
-    setup_environment()
+    
 
 def varsgetter(files):
     evars = ""
@@ -177,6 +189,7 @@ def update():
 
 try:
     if __name__ == "__main__":
+        setup_environment()
         update()
 except Exception:
     traceback.print_exc()
